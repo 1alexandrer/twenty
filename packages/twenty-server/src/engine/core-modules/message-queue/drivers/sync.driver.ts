@@ -12,21 +12,17 @@ import { type MessageQueue } from 'src/engine/core-modules/message-queue/message
 export class SyncDriver implements MessageQueueDriver {
   private readonly logger = new Logger(SyncDriver.name);
   private workersMap: {
-    [queueName: string]: (job: MessageQueueJob) => Promise<unknown> | unknown;
+    [queueName: string]: (job: MessageQueueJob) => Promise<void> | void;
   } = {};
 
   constructor() {}
 
-  async add<T extends MessageQueueJobData, TResult = void>(
+  async add<T extends MessageQueueJobData>(
     queueName: MessageQueue,
     jobName: string,
     data: T,
-  ): Promise<TResult | void> {
-    return await this.processJob<T, TResult>(queueName, {
-      id: '',
-      name: jobName,
-      data,
-    });
+  ): Promise<void> {
+    await this.processJob(queueName, { id: '', name: jobName, data });
   }
 
   async addCron<T extends MessageQueueJobData | undefined>({
@@ -52,30 +48,26 @@ export class SyncDriver implements MessageQueueDriver {
     this.logger.log(`Removing '${queueName}' cron job with SyncDriver`);
   }
 
-  work<T extends MessageQueueJobData, TResult = void>(
+  work<T extends MessageQueueJobData>(
     queueName: MessageQueue,
-    handler: (job: MessageQueueJob<T>) => Promise<TResult> | TResult,
+    handler: (job: MessageQueueJob<T>) => Promise<void> | void,
   ): void {
     this.logger.log(`Registering handler for queue: ${queueName}`);
-    this.workersMap[queueName] = handler as (
-      job: MessageQueueJob,
-    ) => Promise<unknown> | unknown;
+    this.workersMap[queueName] = handler;
   }
 
-  async processJob<T extends MessageQueueJobData, TResult = unknown>(
+  async processJob<T extends MessageQueueJobData>(
     queueName: string,
     job: MessageQueueJob<T>,
-  ): Promise<TResult | undefined> {
+  ) {
     const worker = this.workersMap[queueName];
 
     if (worker) {
-      return (await worker(job)) as TResult;
+      await worker(job);
+    } else {
+      if (process.env.NODE_ENV !== 'test') {
+        this.logger.error(`No handler found for job: ${queueName}`);
+      }
     }
-
-    if (process.env.NODE_ENV !== 'test') {
-      this.logger.error(`No handler found for job: ${queueName}`);
-    }
-
-    return undefined;
   }
 }

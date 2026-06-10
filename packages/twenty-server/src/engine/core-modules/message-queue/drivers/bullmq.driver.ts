@@ -92,9 +92,9 @@ export class BullMQDriver
     ]);
   }
 
-  work<T, TResult = void>(
+  work<T>(
     queueName: MessageQueue,
-    handler: (job: MessageQueueJob<T>) => Promise<TResult>,
+    handler: (job: MessageQueueJob<T>) => Promise<void>,
     options?: MessageQueueWorkerOptions,
   ) {
     const workerOptions = {
@@ -110,7 +110,7 @@ export class BullMQDriver
 
     this.workerMap[queueName] = new Worker(
       queueName,
-      async (job): Promise<TResult> =>
+      async (job) =>
         Sentry.withIsolationScope(async () => {
           applyWorkspaceSentryContextFromJobData(job.data);
 
@@ -124,19 +124,13 @@ export class BullMQDriver
           this.logger.log(
             `Processing job ${job.id} with name ${job.name} on queue ${queueName}${workspaceSuffix}`,
           );
-          const result = await handler({
-            data: job.data,
-            id: job.id ?? '',
-            name: job.name,
-          });
+          await handler({ data: job.data, id: job.id ?? '', name: job.name });
           const timeEnd = performance.now();
           const executionTime = timeEnd - timeStart;
 
           this.logger.log(
             `Job ${job.id} with name ${job.name} processed on queue ${queueName} in ${executionTime.toFixed(2)}ms${workspaceSuffix}`,
           );
-
-          return result;
         }),
       workerOptions,
     );
@@ -223,12 +217,12 @@ export class BullMQDriver
     );
   }
 
-  async add<T, TResult = void>(
+  async add<T>(
     queueName: MessageQueue,
     jobName: string,
     data: T,
     options?: QueueJobOptions,
-  ): Promise<TResult | void> {
+  ): Promise<void> {
     if (!this.queueMap[queueName]) {
       throw new Error(
         `Queue ${queueName} is not registered, make sure you have added it as a queue provider`,

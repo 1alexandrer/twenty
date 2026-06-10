@@ -3,11 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { type gmail_v1 } from 'googleapis';
 import { http, HttpResponse, type RequestHandler } from 'msw';
 
-import { setupHttpMock } from 'test/integration/utils/http-mock';
+import { type HttpMock, setupHttpMock } from 'test/integration/utils/http-mock';
 
-export const INVALID_REFRESH_TOKEN_PREFIX = 'invalid-refresh-token';
-
-const GOOGLE_OAUTH_SCOPES = [
+export const GOOGLE_OAUTH_SCOPES = [
   'email',
   'profile',
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -107,6 +105,49 @@ const buildBatchMultipartResponse = (
   };
 };
 
+export const googleAccountIdentityHandlers = (handle: string): unknown[] => [
+  http.get('https://www.googleapis.com/oauth2/v3/userinfo', () =>
+    HttpResponse.json({
+      sub: `google-user-id-${handle}`,
+      email: handle,
+      email_verified: true,
+      name: 'Jane Austen',
+      given_name: 'Jane',
+      family_name: 'Austen',
+    }),
+  ),
+  http.get('https://www.googleapis.com/oauth2/v3/tokeninfo', () =>
+    HttpResponse.json({ scope: GOOGLE_OAUTH_SCOPES, email: handle }),
+  ),
+  http.get('https://gmail.googleapis.com/gmail/v1/users/me/profile', () =>
+    HttpResponse.json({ emailAddress: handle, messagesTotal: 0 }),
+  ),
+  http.get('*/gmail/v1/users/me/settings/sendAs', () =>
+    HttpResponse.json({
+      sendAs: [{ sendAsEmail: handle, isPrimary: true }],
+    }),
+  ),
+];
+
+export const declinedGoogleTokenRefresh = (): unknown =>
+  http.post('https://oauth2.googleapis.com/token', () =>
+    HttpResponse.json(
+      { error: 'invalid_grant', error_description: 'Token has been revoked' },
+      { status: 400 },
+    ),
+  );
+
+const googleTokenEndpoint = (url: string) =>
+  http.post(url, () =>
+    HttpResponse.json({
+      access_token: 'mock-access-token',
+      refresh_token: 'mock-refresh-token',
+      expires_in: 3600,
+      scope: GOOGLE_OAUTH_SCOPES,
+      token_type: 'Bearer',
+    }),
+  );
+
 const gmailHandlers = ({
   inbox,
   labelStore,
@@ -116,35 +157,8 @@ const gmailHandlers = ({
   labelStore: GmailLabelStore;
   handle: string;
 }): RequestHandler[] => [
-  http.post('https://oauth2.googleapis.com/token', async ({ request }) => {
-    const body = new URLSearchParams(await request.text());
-
-    if (
-      (body.get('refresh_token') ?? '').startsWith(INVALID_REFRESH_TOKEN_PREFIX)
-    ) {
-      return HttpResponse.json(
-        { error: 'invalid_grant', error_description: 'Token has been revoked' },
-        { status: 400 },
-      );
-    }
-
-    return HttpResponse.json({
-      access_token: 'mock-access-token',
-      expires_in: 3600,
-      scope: 'https://www.googleapis.com/auth/gmail.readonly',
-      token_type: 'Bearer',
-    });
-  }),
-  // --- OAuth connect flow (passport code exchange + connect-path availability checks) ---
-  http.post('https://www.googleapis.com/oauth2/v4/token', () =>
-    HttpResponse.json({
-      access_token: 'mock-access-token',
-      refresh_token: 'mock-refresh-token',
-      expires_in: 3600,
-      scope: GOOGLE_OAUTH_SCOPES,
-      token_type: 'Bearer',
-    }),
-  ),
+  googleTokenEndpoint('https://oauth2.googleapis.com/token'),
+  googleTokenEndpoint('https://www.googleapis.com/oauth2/v4/token'),
   http.get('https://www.googleapis.com/oauth2/v3/userinfo', () =>
     HttpResponse.json({
       sub: 'google-user-id',
@@ -188,15 +202,36 @@ const gmailHandlers = ({
       resultSizeEstimate: inbox.length,
     });
   }),
-  http.get('*/gmail/v1/users/me/messages/:messageId', ({ params }) =>
-    HttpResponse.json<gmail_v1.Schema$Message>({
-      id: String(params.messageId),
-      threadId: String(params.messageId),
+  http.get('*/gmail/v1/users/me/history', () =>
+    HttpResponse.json<gmail_v1.Schema$ListHistoryResponse>({
+      history: [],
       historyId: inbox[0]?.historyId ?? '987654321',
     }),
   ),
-  http.post('*/batch', () => {
-    const { body, contentType } = buildBatchMultipartResponse(inbox);
+  http.get('*/gmail/v1/users/me/messages/:messageId', ({ params }) => {
+    const message = inbox.find(
+      (candidate) => candidate.id === params.messageId,
+    );
+
+    if (!message) {
+      return HttpResponse.json(
+        { error: { code: 404, message: 'Not Found' } },
+        { status: 404 },
+      );
+    }
+
+    return HttpResponse.json<gmail_v1.Schema$Message>(message);
+  }),
+  http.post('*/batch', async ({ request }) => {
+    const requestedIds = [
+      ...(await request.text()).matchAll(/messages\/([\w-]+)/g),
+    ].map((match) => match[1]);
+    const requestedMessages = inbox.filter((message) =>
+      requestedIds.includes(message.id ?? ''),
+    );
+
+    const { body, contentType } =
+      buildBatchMultipartResponse(requestedMessages);
 
     return new HttpResponse(body, { headers: { 'Content-Type': contentType } });
   }),
@@ -210,7 +245,7 @@ export const setupGmailMock = ({
   inbox: gmail_v1.Schema$Message[];
   labels?: gmail_v1.Schema$Label[];
   handle?: string;
-}): { labels: GmailLabelStore; use: (...handlers: unknown[]) => void } => {
+}): { labels: GmailLabelStore; use: HttpMock['use'] } => {
   const labelStore = createGmailLabelStore(labels);
 
   const httpMock = setupHttpMock(

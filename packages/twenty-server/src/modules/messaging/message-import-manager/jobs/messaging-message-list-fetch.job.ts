@@ -22,11 +22,6 @@ export type MessagingMessageListFetchJobData = {
   workspaceId: string;
 };
 
-export type MessagingMessageListFetchJobResult = {
-  messagesToImport: number;
-  messagesToDelete: number;
-};
-
 @Processor({
   queueName: MessageQueue.messagingQueue,
   scope: Scope.REQUEST,
@@ -42,9 +37,7 @@ export class MessagingMessageListFetchJob {
   ) {}
 
   @Process(MessagingMessageListFetchJob.name)
-  async handle(
-    data: MessagingMessageListFetchJobData,
-  ): Promise<MessagingMessageListFetchJobResult> {
+  async handle(data: MessagingMessageListFetchJobData): Promise<void> {
     const { messageChannelId, workspaceId } = data;
 
     await this.messagingMonitoringService.track({
@@ -55,7 +48,7 @@ export class MessagingMessageListFetchJob {
 
     const authContext = buildSystemAuthContext(workspaceId);
 
-    return await this.globalWorkspaceOrmManager.executeInWorkspaceContext<MessagingMessageListFetchJobResult>(
+    await this.globalWorkspaceOrmManager.executeInWorkspaceContext(
       async () => {
         const messageChannel = await this.messageChannelRepository.findOne({
           where: {
@@ -72,14 +65,14 @@ export class MessagingMessageListFetchJob {
             workspaceId,
           });
 
-          return { messagesToImport: 0, messagesToDelete: 0 };
+          return;
         }
 
         if (
           messageChannel.syncStage !==
           MessageChannelSyncStage.MESSAGE_LIST_FETCH_SCHEDULED
         ) {
-          return { messagesToImport: 0, messagesToDelete: 0 };
+          return;
         }
 
         try {
@@ -90,11 +83,10 @@ export class MessagingMessageListFetchJob {
             messageChannelId: messageChannel.id,
           });
 
-          const fetchResult =
-            await this.messagingMessageListFetchService.processMessageListFetch(
-              messageChannel,
-              workspaceId,
-            );
+          await this.messagingMessageListFetchService.processMessageListFetch(
+            messageChannel,
+            workspaceId,
+          );
 
           await this.messagingMonitoringService.track({
             eventName: 'message_list_fetch.completed',
@@ -102,8 +94,6 @@ export class MessagingMessageListFetchJob {
             connectedAccountId: messageChannel.connectedAccount.id,
             messageChannelId: messageChannel.id,
           });
-
-          return fetchResult;
         } catch (error) {
           await this.messageImportErrorHandlerService.handleDriverException(
             error,
@@ -111,8 +101,6 @@ export class MessagingMessageListFetchJob {
             messageChannel,
             workspaceId,
           );
-
-          return { messagesToImport: 0, messagesToDelete: 0 };
         }
       },
       authContext,

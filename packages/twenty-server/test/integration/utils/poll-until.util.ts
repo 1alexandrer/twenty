@@ -1,8 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 
-// Polls `read` until `predicate` passes or the timeout elapses, then returns the last value
-// (so the caller's assertion produces a meaningful diff on timeout). Used to await the
-// eventual outcome of jobs running on the real BullMQ worker.
 export const pollUntil = async <TValue>(
   read: () => Promise<TValue>,
   predicate: (value: TValue) => boolean,

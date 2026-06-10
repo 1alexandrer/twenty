@@ -6,7 +6,7 @@ import {
 } from '@microsoft/microsoft-graph-types';
 import { http, HttpResponse, type RequestHandler } from 'msw';
 
-import { setupHttpMock } from 'test/integration/utils/http-mock';
+import { type HttpMock, setupHttpMock } from 'test/integration/utils/http-mock';
 
 export const microsoftMessage = (overrides: Partial<Message> = {}): Message => {
   const id = overrides.id ?? `ms-msg-${randomUUID()}`;
@@ -24,6 +24,9 @@ export const microsoftMessage = (overrides: Partial<Message> = {}): Message => {
     ...overrides,
   };
 };
+
+export const getMicrosoftMessageSubject = (message: Message): string =>
+  message.subject ?? '';
 
 const DEFAULT_FOLDERS: MailFolder[] = [
   { id: 'inbox', displayName: 'Inbox' },
@@ -59,10 +62,31 @@ const createMicrosoftFolderStore = (
 const microsoftHandlers = ({
   inbox,
   folderStore,
+  handle,
 }: {
   inbox: Message[];
   folderStore: MicrosoftFolderStore;
+  handle: string;
 }): RequestHandler[] => [
+  http.post('https://login.microsoftonline.com/common/oauth2/v2.0/token', () =>
+    HttpResponse.json({
+      token_type: 'Bearer',
+      access_token: 'mock-access-token',
+      refresh_token: 'mock-refresh-token',
+      expires_in: 3600,
+      scope: 'openid profile email offline_access',
+    }),
+  ),
+  http.get('https://graph.microsoft.com/v1.0/me', () =>
+    HttpResponse.json({
+      id: 'microsoft-user-id',
+      displayName: 'Jane Austen',
+      givenName: 'Jane',
+      surname: 'Austen',
+      mail: handle,
+      userPrincipalName: handle,
+    }),
+  ),
   http.get('*/me/mailFolders', () =>
     HttpResponse.json<{ value: MailFolder[] }>({ value: folderStore.list() }),
   ),
@@ -89,16 +113,20 @@ const microsoftHandlers = ({
 export const setupMicrosoftMock = ({
   inbox,
   folders = DEFAULT_FOLDERS,
+  handle = 'me@example.com',
 }: {
   inbox: Message[];
   folders?: MailFolder[];
+  handle?: string;
 }): {
   folders: MicrosoftFolderStore;
-  use: (...handlers: unknown[]) => void;
+  use: HttpMock['use'];
 } => {
   const folderStore = createMicrosoftFolderStore(folders);
 
-  const httpMock = setupHttpMock(...microsoftHandlers({ inbox, folderStore }));
+  const httpMock = setupHttpMock(
+    ...microsoftHandlers({ inbox, folderStore, handle }),
+  );
 
   return { folders: folderStore, use: httpMock.use };
 };

@@ -21,7 +21,6 @@ import { type MessageChannelMessageAssociationWorkspaceEntity } from 'src/module
 import { MessagingMessageCleanerService } from 'src/modules/messaging/message-cleaner/services/messaging-message-cleaner.service';
 import { SyncMessageFoldersService } from 'src/modules/messaging/message-folder-manager/services/sync-message-folders.service';
 import { MessagingCursorService } from 'src/modules/messaging/message-import-manager/services/messaging-cursor.service';
-import { type MessagingMessageListFetchJobResult } from 'src/modules/messaging/message-import-manager/jobs/messaging-message-list-fetch.job';
 import { MessagingGetMessageListService } from 'src/modules/messaging/message-import-manager/services/messaging-get-message-list.service';
 import {
   MessageImportExceptionHandlerService,
@@ -57,10 +56,10 @@ export class MessagingMessageListFetchService {
   public async processMessageListFetch(
     messageChannel: MessageChannelEntity,
     workspaceId: string,
-  ): Promise<MessagingMessageListFetchJobResult> {
+  ) {
     const authContext = buildSystemAuthContext(workspaceId);
 
-    return await this.globalWorkspaceOrmManager.executeInWorkspaceContext<MessagingMessageListFetchJobResult>(
+    await this.globalWorkspaceOrmManager.executeInWorkspaceContext(
       async () => {
         try {
           const pendingGroupEmailActionsProcessed =
@@ -97,7 +96,7 @@ export class MessagingMessageListFetchService {
               `WorkspaceId: ${workspaceId}, MessageChannelId: ${messageChannel.id} - Message channel not found`,
             );
 
-            return { messagesToImport: 0, messagesToDelete: 0 };
+            return;
           }
 
           const messageFolders =
@@ -250,10 +249,7 @@ export class MessagingMessageListFetchService {
               workspaceId,
             );
 
-            return {
-              messagesToImport: totalMessagesToImportCount,
-              messagesToDelete: allMessageExternalIdsToDelete.length,
-            };
+            return;
           }
 
           this.logger.debug(
@@ -273,11 +269,6 @@ export class MessagingMessageListFetchService {
             freshMessageChannel.connectedAccount,
             workspaceId,
           );
-
-          return {
-            messagesToImport: totalMessagesToImportCount,
-            messagesToDelete: allMessageExternalIdsToDelete.length,
-          };
         } catch (error) {
           await this.messageImportErrorHandlerService.handleDriverException(
             error,
@@ -285,8 +276,6 @@ export class MessagingMessageListFetchService {
             messageChannel,
             workspaceId,
           );
-
-          return { messagesToImport: 0, messagesToDelete: 0 };
         }
       },
       authContext,
